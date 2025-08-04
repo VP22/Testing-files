@@ -1,0 +1,318 @@
+*** Settings ***
+Library    RequestsLibrary
+Library    Collections
+Library    String
+
+Suite Setup       Create Session    api    ${BASE_URL}    headers=${DEFAULT_HEADERS}
+Suite Teardown    Delete All Sessions
+
+*** Variables ***
+${BASE_URL}         https://api.example.com
+${DEFAULT_HEADERS}  {"Content-Type": "application/json"}
+${TOKEN}            your-jwt-token-here
+${UPLOAD_ENDPOINT_AVATAR}    /api/v1/users/me/avatar
+${UPLOAD_ENDPOINT_COVER}     /api/v1/users/me/cover
+${PROFILE_ENDPOINT}          /api/v1/users/me
+
+*** Test Cases ***
+TC-IMG-001: Upload avatar without login
+    [Documentation]    Expect 401 when uploading avatar without auth
+    Given I have no valid authentication session
+    When  I send a request to upload an avatar image
+    Then  I receive a response with status code 401
+
+TC-IMG-002: Upload cover without login
+    [Documentation]    Expect 401 when uploading cover without auth
+    Given I have no valid authentication session
+    When  I send a request to upload a cover image
+    Then  I receive a response with status code 401
+
+TC-IMG-003: Upload valid avatar
+    [Documentation]    Upload valid JPEG/PNG avatar (≤5MB)
+    Given I am authenticated
+    And   I have a valid image file "test_avatar.png"
+    When  I upload it as my avatar
+    Then  the upload succeeds with status code 200
+    And   the response contains a valid "avatar_url"
+    And   the image is stored and accessible
+
+TC-IMG-004: Upload valid cover
+    [Documentation]    Upload valid JPEG/PNG cover (≤10MB)
+    Given I am authenticated
+    And   I have a valid image file "test_cover.jpg"
+    When  I upload it as my cover
+    Then  the upload succeeds with status code 200
+    And   the response contains a valid "cover_url"
+    And   the image is stored and accessible
+
+TC-IMG-005: Upload avatar with invalid format
+    [Documentation]    Reject .exe, .txt, etc.
+    Given I am authenticated
+    And   I have a file "malicious.exe"
+    When  I upload it as avatar
+    Then  the upload fails with status code 400
+    And   the response indicates invalid file type
+
+TC-IMG-006: Upload cover with invalid format
+    [Documentation]    Reject disallowed formats for cover
+    Given I am authenticated
+    And   I have a file "document.pdf"
+    When  I upload it as cover
+    Then  the upload fails with status code 400
+    And   the response indicates invalid file type
+
+TC-IMG-007: Upload oversized avatar
+    [Documentation]    >5MB avatar should be rejected
+    Given I am authenticated
+    And   I have a large image file "huge_avatar.png"    size=6MB
+    When  I upload it as avatar
+    Then  the upload fails with status code 400
+    And   the response indicates file size exceeds limit
+
+TC-IMG-008: Upload oversized cover
+    [Documentation]    >10MB cover should be rejected
+    Given I am authenticated
+    And   I have a large image file "huge_cover.jpg"    size=12MB
+    When  I upload it as cover
+    Then  the upload fails with status code 400
+    And   the response indicates file size exceeds limit
+
+TC-IMG-009: Upload very small image
+    [Documentation]    1x1 px image
+    Given I am authenticated
+    And   I have a tiny image "tiny.png"
+    When  I upload it as avatar or cover
+    Then  the upload succeeds with status code 200
+    And   the image is either stored or auto-resized
+
+TC-IMG-010: Upload avatar with special characters in filename
+    [Documentation]    e.g., my@vatar!.png
+    Given I am authenticated
+    And   I have a file named "my@vatar!.png"
+    When  I upload it as avatar
+    Then  the upload succeeds with status code 200
+    And   the filename is safely handled (sanitized or randomized)
+
+TC-IMG-011: Upload cover with Unicode filename
+    [Documentation]    e.g., cover_привет.jpg
+    Given I am authenticated
+    And   I have a file named "cover_привет.jpg"
+    When  I upload it as cover
+    Then  the upload succeeds with status code 200
+    And   the system processes the filename correctly
+
+TC-IMG-012: Update existing avatar
+    [Documentation]    Replace old avatar
+    Given I already have an avatar set
+    And   I am authenticated
+    When  I upload a new avatar image
+    Then  the upload succeeds with status code 200
+    And   the old avatar is replaced
+    And   the new avatar_url is returned
+
+TC-IMG-013: Update existing cover
+    [Documentation]    Replace old cover
+    Given I already have a cover set
+    And   I am authenticated
+    When  I upload a new cover image
+    Then  the upload succeeds with status code 200
+    And   the old cover is replaced
+    And   the new cover_url is returned
+
+TC-IMG-014: Remove current avatar
+    [Documentation]    DELETE avatar
+    Given I am authenticated and have an avatar set
+    When  I send a DELETE request to remove my avatar
+    Then  the request succeeds with status code 204
+    And   my avatar is reset to default
+    And   avatar_url becomes null or default
+
+TC-IMG-015: Remove current cover
+    [Documentation]    DELETE cover
+    Given I am authenticated and have a cover set
+    When  I send a DELETE request to remove my cover
+    Then  the request succeeds with status code 204
+    And   my cover is reset to default
+    And   cover_url becomes null or default
+
+TC-IMG-016: Retrieve profile with avatar
+    [Documentation]    GET profile with avatar URL
+    Given I am authenticated
+    And   I have uploaded an avatar
+    When  I send a GET request to my profile endpoint
+    Then  the response includes a non-empty "avatar_url"
+    And   the URL points to a publicly accessible image
+
+TC-IMG-017: Retrieve profile with cover
+    [Documentation]    GET profile with cover URL
+    Given I am authenticated
+    And   I have uploaded a cover
+    When  I send a GET request to my profile endpoint
+    Then  the response includes a non-empty "cover_url"
+    And   the URL points to a publicly accessible image
+
+TC-IMG-018: Upload image with EXIF metadata
+    [Documentation]    Strip metadata
+    Given I am authenticated
+    And   I have a JPEG with EXIF/GPS data
+    When  I upload it as avatar or cover
+    Then  the upload succeeds with status code 200
+    And   the stored image has all metadata stripped
+
+TC-IMG-019: Path traversal attempt via filename
+    [Documentation]    e.g., ../../../etc/passwd
+    Given I am authenticated
+    And   I have a file named "../../../etc/passwd"
+    When  I try to upload it as avatar
+    Then  the filename is sanitized or upload rejected
+    And   the system prevents directory traversal
+    And   response is 400 or safe 200
+
+TC-IMG-020: Upload SVG with embedded script
+    [Documentation]    Block malicious SVG
+    Given I am authenticated
+    And   I have an SVG with <script> tag
+    When  I try to upload it as avatar
+    Then  the upload fails with status code 400
+    Or    SVG is rejected unless explicitly allowed
+
+TC-IMG-021: Upload disguised malicious file
+    [Documentation]    .jpg with PHP payload
+    Given I am authenticated
+    And   I have a file "shell.jpg" containing PHP code
+    When  I try to upload it
+    Then  the upload fails with status code 400
+    And   server validates actual MIME type
+
+TC-IMG-022: Upload empty file
+    [Documentation]    0-byte file
+    Given I am authenticated
+    And   I have an empty file "empty.png"
+    When  I send the upload request
+    Then  the upload fails with status code 400
+    And   response indicates invalid or empty file
+
+TC-IMG-023: Send non-multipart upload
+    [Documentation]    JSON instead of form-data
+    Given I am authenticated
+    When  I send JSON data to upload endpoint
+    Then  the server rejects with status code 400
+    And   response indicates invalid content type
+
+TC-IMG-024: Rapid uploads (rate limiting)
+    [Documentation]    Multiple requests in quick succession
+    Given I am authenticated
+    When  I send multiple upload requests rapidly
+    Then  the system enforces rate limiting
+    And   returns 429 Too Many Requests after threshold
+
+TC-IMG-025: Re-upload same image
+    [Documentation]    Avoid duplicates
+    Given I am authenticated
+    And   I upload the same image twice
+    Then  both uploads succeed
+    And   system avoids storing duplicate files
+
+TC-IMG-026: Avatar URL is publicly accessible
+    [Documentation]    No auth needed to view
+    Given an avatar has been uploaded
+    When  I access the avatar_url without login
+    Then  the image loads successfully with status 200
+
+TC-IMG-027: Cover URL is publicly accessible
+    [Documentation]    No auth needed
+    Given a cover has been uploaded
+    When  I access the cover_url without authentication
+    Then  the image loads successfully
+
+TC-IMG-028: Avatar served with correct MIME type
+    [Documentation]    Check Content-Type header
+    Given an avatar is uploaded
+    When  I request the image URL
+    Then  the response includes Content-Type: image/jpeg or image/png
+
+TC-IMG-029: Cover served with correct MIME type
+    [Documentation]    Check Content-Type
+    Given a cover is uploaded
+    When  I request the cover image URL
+    Then  the response includes correct Content-Type header
+
+TC-IMG-030: Upload animated GIF as avatar
+    [Documentation]    Handle animation
+    Given I am authenticated
+    And   I have a valid animated GIF ≤5MB
+    When  I upload it as avatar
+    Then  the upload succeeds
+    And   animation is preserved or converted to static
+
+TC-IMG-031: Upload animated GIF as cover
+    [Documentation]    Handle animation
+    Given I am authenticated
+    And   I have a valid animated GIF ≤10MB
+    When  I upload it as cover
+    Then  the upload succeeds
+    And   animation is handled per design
+
+TC-IMG-032: Upload WebP image
+    [Documentation]    Modern format
+    Given I am authenticated
+    And   I have a valid .webp file
+    When  I upload it as avatar or cover
+    Then  the upload succeeds
+    And   the image is displayed correctly
+
+TC-IMG-033: Upload HEIC image
+    [Documentation]    iPhone format
+    Given I am authenticated
+    And   I have a .HEIC file
+    When  I upload it
+    Then  the upload fails with 400 or succeeds with conversion
+
+TC-IMG-034: Upload large image (auto-resize)
+    [Documentation]    Resize to max dimensions
+    Given I am authenticated
+    And   I upload a 4000x4000 image
+    When  the upload completes
+    Then  the image is resized (e.g., 500x500 max)
+    And   aspect ratio is preserved
+
+TC-IMG-035: Upload non-square image (preserve ratio)
+    [Documentation]    No stretching
+    Given I am authenticated
+    And   I upload a 100x200 image
+    When  I upload as avatar
+    Then  the image is resized proportionally
+    And   not stretched or distorted
+
+TC-IMG-036: Upload avatar with private profile
+    [Documentation]    Works even if profile is private
+    Given my profile is set to private
+    And   I am authenticated
+    When  I upload an avatar
+    Then  the upload succeeds with status 200
+    And   the image is hosted publicly (if required)
+
+TC-IMG-037: Concurrent uploads (avatar + cover)
+    [Documentation]    No race conditions
+    Given I am authenticated
+    When  I send simultaneous requests to upload avatar and cover
+    Then  both uploads succeed independently
+
+TC-IMG-038: Upload for invalid user ID
+    [Documentation]    404 or 403
+    Given I try to upload to a non-existent user
+    When  I send the request
+    Then  I receive 404 Not Found or 403 Forbidden
+
+TC-IMG-039: Malformed multipart data
+    [Documentation]    Corrupted upload
+    Given I am authenticated
+    When  I send malformed multipart request
+    Then  server returns 400 Bad Request
+    And   no file is processed
+
+TC-IMG-040: View profile without avatar or cover
+    [Documentation]    Default/null values
+    Given I have never uploaded avatar or cover
+    When  I retrieve my profile
+    Then  avatar_url and cover_url are null or point to defaults
